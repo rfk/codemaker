@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "codemaker",
+  "codemaker_python",
+  "codemaker_sample",
+]

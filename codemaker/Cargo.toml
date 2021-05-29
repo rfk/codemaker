@@ -1,0 +1,10 @@
+[package]
+name = "codemaker"
+version = "0.0.1"
+authors = ["Ryan Kelly <ryan@rfk.id.au>"]
+description = "A structured approach to generating source code"
+repository = "https://github.com/rfk/codemaker"
+license = "Apache-2.0 / MIT"
+edition = "2018"
+
+[dependencies]

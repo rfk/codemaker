@@ -1,0 +1,16 @@
+[package]
+name = "codemaker_sample"
+version = "0.0.1"
+authors = ["Ryan Kelly <ryan@rfk.id.au>"]
+description = "A sample crate that uses the `codemaker` crate."
+repository = "https://github.com/rfk/codemaker"
+license = "Apache-2.0 / MIT"
+edition = "2018"
+
+[dependencies]
+codemaker = { path = "../codemaker", version = "0.0.1"}
+codemaker_python = { path = "../codemaker_python", version = "0.0.1"}
+
+[[bin]]
+name = "codemaker-sample"
+path = "./src/main.rs"
