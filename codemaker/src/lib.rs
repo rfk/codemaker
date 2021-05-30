@@ -272,11 +272,11 @@ where
 /// This trait doesn't actually *do* very much just yet, it's mostly designed to
 /// help consumers form a correct mental model of how the pieces fit together.
 /// The real action happens in the [`CodeMakerRule`] trait.
-pub trait CodeMaker<'a>: CodeMakerRule<'a, Self::Input, Self::Output> {
-    type Input: 'a;
-    type Output: 'a; // TODO: worth it? OutputFileSet + 'a;
+pub trait CodeMaker: CodeMakerRule<Self::Input, Self::Output> {
+    type Input;
+    type Output; // TODO: worth it? : OutputFileSet;
 
-    fn make(&'a self, input: Self::Input) -> Self::Output {
+    fn make(&self, input: Self::Input) -> Self::Output {
         CodeMakerRule::<Self::Input, Self::Output>::make_from(self, input)
     }
 }
@@ -290,8 +290,8 @@ pub trait CodeMaker<'a>: CodeMakerRule<'a, Self::Input, Self::Output> {
 /// [`CodeMakerRule`] impls for each part, and then assembling the results into the
 /// final `Output`.
 ///
-/// The idea here is similar to the `Into` trait, which helps you convert one type
-/// into another by decomposing it into individual fields and calling `.into()` on
+/// The idea here is similar to the `From` trait, which helps you convert one type
+/// into another by decomposing it into individual fields and calling `.from()` on
 /// each of them in turn. Here we do something similar, but we use a [`CodeMaker`]
 /// to carry additional context about how to do the transformation, and call its
 /// `.make_from()` method an each part in turn.
@@ -299,38 +299,35 @@ pub trait CodeMaker<'a>: CodeMakerRule<'a, Self::Input, Self::Output> {
 /// Implementing this trait by hand is possible, but cumbersome; consider using
 /// the [`define_codemaker_rules!`] macro to simplify the process of defining a
 /// collection of such rules.
-pub trait CodeMakerRule<'a, Input: 'a, Output: 'a> {
+pub trait CodeMakerRule<Input, Output> {
     /// Make an instance of the output type from an instance of the input type.
     ///
     /// Consumers should provide a concrete implementation of this method for
     /// each desired input type and corresponding output type.
-    fn make_from(&'a self, input: Input) -> Output;
-}
+    fn make_from(&self, input: Input) -> Output;
 
-/// A default implementation of [`CodeMakerRule`] for iterators.
-///
-/// This is a convenience implementation allowing a [`CodeMakerRule`] implementor to map
-/// itself over an interator, turning an `Iterator<Item=Input>` into an `Iterator<Item=Output>`
-/// for any of its possible `Input`/`Output` types.
-///
-/// The trait bounds here, in words: for any `T` implementing `CodeMakerRule<Input, Output>`
-/// we can also implement `CodeMakerRule<Iterator<Item=Input>, impl Iterator<Item=Output>>`
-/// as long as all the iteration state lasts for the required lifetime.
-///
-/// Since we cannot use `impl Iterator` in a trait definition, we provide a concrete helper
-/// struct `CodeMakeRuleMap` that implements it for us. Please treat this struct as an
-/// internal implementation detail.
-impl<'a, Input, Output, T, I> CodeMakerRule<'a, I, CodeMakerRuleMap<'a, Input, Output, T, I>> for T
-where
-    T: CodeMakerRule<'a, Input, Output>,
-    I: Iterator<Item = Input> + 'a,
-    Input: 'a,
-    Output: 'a,
-{
-    fn make_from(&'a self, input: I) -> CodeMakerRuleMap<'a, Input, Output, T, I> {
+
+    /// Conveniently map `make_from` over an iterator.
+    ///
+    /// This is a convenience method to map a [`CodeMakerRule`] over an iterator without having
+    /// to explicitly wrap it in a closure. It can turn any `IntoIterator<Item=Input>` into an
+    /// `Iterator<Item=Output>` for any of its possible `Input` and `Output` types supported by
+    /// the trait implementor.
+    ///
+    /// Since we cannot use `impl Iterator` in a trait definition, we provide a concrete helper
+    /// struct [`CodeMakerRuleMap`] that implements it for us. Please treat this struct as an
+    /// internal implementation detail.
+    fn make_from_iter<'a, I>(&'a self, input: I) -> CodeMakerRuleMap<'a, Input, Output, Self, I::IntoIter>
+    where
+        Self: CodeMakerRule<Input, Output>,
+        I: IntoIterator<Item=Input> + 'a,
+        Self: Sized,
+        Input: 'a,
+        Output: 'a,
+    {
         CodeMakerRuleMap {
             maker: self,
-            iter: input,
+            iter: input.into_iter(),
             phantom: std::marker::PhantomData,
         }
     }
@@ -344,7 +341,7 @@ where
 /// `impl Iterator` from trait methods and we don't want to have to box things.
 pub struct CodeMakerRuleMap<'a, Input, Output, T, I>
 where
-    T: CodeMakerRule<'a, Input, Output>,
+    T: CodeMakerRule<Input, Output>,
     I: Iterator<Item = Input>,
     Input: 'a,
     Output: 'a,
@@ -358,7 +355,7 @@ where
 
 impl<'a, Input, Output, T, I> Iterator for CodeMakerRuleMap<'a, Input, Output, T, I>
 where
-    T: CodeMakerRule<'a, Input, Output>,
+    T: CodeMakerRule<Input, Output>,
     I: Iterator<Item = Input>,
     Input: 'a,
     Output: 'a,
@@ -367,44 +364,6 @@ where
     fn next(&mut self) -> Option<Output> {
         self.iter.next().map(|i| self.maker.make_from(i))
     }
-}
-
-/// Macro for more easily defining a [`CodeMakerRule`].
-///
-/// There's a fair bit of boilerplate involved in defining a [`CodeMakerRule`], since
-/// each Input/Output pair needs its own trait implementation. This macro helps avoid
-/// some of the boilerplate by turning a call like this:
-///
-/// ```ignore
-/// define_codemaker_rule!{
-///     MyCodeMaker as self where MyInputType as input => MyOutputType {
-///         self.somehow_do_the_making(input)
-///     }
-/// }
-/// ```
-///
-/// Into a full trait implementation like this:
-///
-/// ```ignore
-/// impl CodeMakerRule<MyInputType, MyOutputType> for MyCodeMaker {
-///     fn make_from(&self, input: &MyInputType) -> MyOutputType {
-///         self.somehow_do_the_making(input)
-///     }
-/// }
-/// ```
-///
-/// That's useful on its own, but in practice you're likely to be generating lots of
-/// rules on a single type; in that case the [`define_codemaker_rules!]` macro is likely
-/// to be more convenient (note the plural *rules* in its name).
-#[macro_export]
-macro_rules! define_codemaker_rule {
-    (& $a:lifetime $CG:ty as $self:ident where & $i:lifetime $In:ty as $input:ident => $Out:ty $body:block) => {
-        impl<$a> $crate::CodeMakerRule<$a, $In, $Out> for $CG {
-            fn make_from(&$a $self, $input: & $i $In) -> $Out {
-                $body
-            }
-        }
-    };
 }
 
 /// Macro for generating a suite of [`CodeMakerRule`] implementations on a type.
@@ -429,49 +388,20 @@ macro_rules! define_codemaker_rule {
 ///
 /// Into a suite of [`CodeMakerRule`] implementations on the `MyCodeMaker` type, one
 /// for each of the provided `InputType`/`OutputType` pairs.
+///
+/// This macro uses a `Type as name` syntax for capturing the arguments for the
+/// resulting method calls, rather than the usual `name: Type`. This is designed
+/// to visually emphasize the mapping between the input type at the start of the rule
+/// and the output type at the end.
 #[macro_export]
 macro_rules! define_codemaker_rules {
-    // Base case, to stop recursion when we have run out of rules.
-    (& $a:lifetime $CM:ty as $self:ident { }) => { };
-    // In the most elaborate case, we have an explicit lifetime name on the target type
-    // and a (hopefully matching!) lifetime on the input type of the rule.
-    (& $a:lifetime $CM:ty as $self:ident { & $i:lifetime $In:ty as $input:ident => $Out:ty $body:block $($tail:tt)* }) => {
-        impl<$a> $crate::CodeMakerRule<$a,  & $i $In, $Out> for $CM {
-            fn make_from(&$a $self, $input: & $i $In) -> $Out {
-                $body
+    ($CM:ty as $self:ident { $($In:ty as $input:ident => $Out:ty $body:block)* }) => {
+        $(
+            impl $crate::CodeMakerRule<$In, $Out> for $CM {
+                fn make_from(&$self, $input: $In) -> $Out {
+                    $body
+                }
             }
-        }
-        define_codemaker_rules!{& $a $CM as $self { $($tail)* }}
-    };
-    // As above, but the input type has an implicit lifetime.
-    // We want to insert the matching lifetime from the target type.
-    (& $a:lifetime $CM:ty as $self:ident { & $In:ty as $input:ident => $Out:ty $body:block $($tail:tt)* }) => {
-        impl<$a> $crate::CodeMakerRule<$a, & $a $In, $Out> for $CM {
-            fn make_from(&$a $self, $input: & $a $In) -> $Out {
-                $body
-            }
-        }
-        define_codemaker_rules!{& $a $CM as $self { $($tail)* }}
-    };
-    // As above, but the input type is not a reference, so no lifetime to worry about.
-    (& $a:lifetime $CM:ty as $self:ident { $In:ty as $input:ident => $Out:ty $body:block $($tail:tt)* }) => {
-        impl<$a> $crate::CodeMakerRule<$a, $In, $Out> for $CM {
-            fn make_from(&$a $self, $input: $In) -> $Out {
-                $body
-            }
-        }
-        define_codemaker_rules!{& $a $CM as $self { $($tail)* }}
-    };
-    // Convenience case: anonymous lifetime on the target type, make it explicit.
-    (& $CG:ty as $self:ident $($tail:tt)*) => {
-        $crate::define_codemaker_rules!{
-            &'a $CG as $self $($tail)*
-        }
-    };
-    // Convenience case: no lifetime specified on the target type, so we make one.
-    ($CG:ty as $self:ident $($tail:tt)*) => {
-        $crate::define_codemaker_rules!{
-            &'a $CG as $self $($tail)*
-        }
+        )*
     };
 }

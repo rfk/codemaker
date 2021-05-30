@@ -31,7 +31,6 @@ impl Package {
     }
 
     pub fn add_module(mut self, mut m: Module) -> Self {
-        // TODO: need to adjust its path to include my directory
         m.filepath = self.dirpath.join(m.filepath);
         self.modules.push(m);
         return self;
