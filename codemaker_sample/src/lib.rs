@@ -22,11 +22,13 @@ use codemaker_python as py;
 pub struct StatusCodes {
     pub codes: Vec<(u16, String)>,
 }
+
 pub struct PythonStatusModuleMaker {
     pub module_name: String,
 }
 
-impl<'a> CodeMaker<'a> for PythonStatusModuleMaker {
+impl<'a> CodeMaker<'a> for PythonStatusModuleMaker
+{
     type Input = &'a StatusCodes;
     type Output = py::Module;
 }
@@ -37,14 +39,14 @@ define_codemaker_rules! {
         // TODO: ideally we'd accept doc-comments here.
 
         // The main top-level conversion.
-        &'a StatusCodes as input => py::Module {
+        &StatusCodes as input => py::Module {
             py::Module::new(self.module_name.as_str())
-                .extend(self.make_from(input.codes.iter()))
+                .extend(self.make_from_iter(input.codes.iter()))
         }
 
         // Each individiual code entry becomes a global variable assignment.
-        &'a (u16, String) as input => py::Block {
-            py::Block::new().push(format!("{} = {}", input.1, input.0))
+        &(u16, String) as input => py::Statement {
+            py::Statement::new().push(format!("{} = {}", input.1, input.0))
         }
     }
 }
