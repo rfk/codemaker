@@ -397,10 +397,11 @@ where
 /// the macro from injecting variables into your code).
 #[macro_export]
 macro_rules! define_codemaker_rules {
-    // TODO: maybe we can accept a pattern here instead of `$input:ident`, for destructuring?
-    // TODO: need to accept `#[doc="..."]` and maybe other attributes, for rustdoc purposes.
-    ($CM:ty as $self:ident { $($In:ty as $input:ident => $Out:ty $body:block)* }) => {
+    ($CM:ty as $self:ident {
+        $( $(#[$($attr:tt)+])* $In:ty as $input:pat => $Out:ty $body:block )*
+    }) => {
         $(
+            $(#[$($attr)+])*
             impl $crate::CodeMakerRule<$In, $Out> for $CM {
                 fn make_from(&$self, $input: $In) -> $Out {
                     $body
@@ -409,3 +410,22 @@ macro_rules! define_codemaker_rules {
         )*
     };
 }
+
+
+pub trait FluentAPI : Sized {
+    fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
+        func(&mut self);
+        return self
+    }
+}
+
+pub trait Extend<Item>: std::iter::Extend<Item> + FluentAPI {
+    fn extend<I: Into<Item>, Iter: IntoIterator<Item=I>>(self, iter: Iter) -> Self {
+        self.edit(|me| std::iter::Extend::extend(me, iter.into_iter().map(Into::into)))
+    }
+    fn push<I: Into<Item>>(self, item: I) -> Self {
+        self.extend(std::iter::once(item))
+    }
+}
+
+impl<T, Item> Extend<Item> for T where T: std::iter::Extend<Item> + FluentAPI {}

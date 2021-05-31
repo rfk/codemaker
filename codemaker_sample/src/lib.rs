@@ -16,7 +16,7 @@
 
 //! # A sample crate that uses `codemaker`.
 
-use codemaker::{define_codemaker_rules, CodeMaker};
+use codemaker::{define_codemaker_rules, CodeMaker, CodeMakerRule, Extend};
 use codemaker_python as py;
 
 pub struct StatusCodes {
@@ -36,17 +36,42 @@ impl<'a> CodeMaker<'a> for PythonStatusModuleMaker
 define_codemaker_rules! {
     PythonStatusModuleMaker as self {
 
-        // TODO: ideally we'd accept doc-comments here.
-
-        // The main top-level conversion.
+        /// The main top-level conversion.
         &StatusCodes as input => py::Module {
             py::Module::new(self.module_name.as_str())
                 .extend(self.make_from_iter(input.codes.iter()))
+                .push(MakeCodeLookupFunc::make_from(input))
         }
 
         // Each individiual code entry becomes a global variable assignment.
+        &(u16, String) as (code, name) => py::Assignment {
+            py::Assignment::new(name.clone(), format!("{}", code))
+        }
+    }
+}
+
+pub struct MakeCodeLookupFunc { }
+
+impl MakeCodeLookupFunc {
+    fn make_from<Input, Output>(input: Input) -> Output
+    where
+        Self: CodeMakerRule<Input, Output>
+    {
+        CodeMakerRule::make_from(&MakeCodeLookupFunc {}, input)
+    }
+}
+
+define_codemaker_rules! {
+    MakeCodeLookupFunc as self {
+
+        &StatusCodes as input => py::FunctionDefinition {
+            py::FunctionDefinition::new("status_for_code".into())
+                .add_arg("code".into())
+                .extend(self.make_from_iter(input.codes.iter()))
+        }
+
         &(u16, String) as input => py::Statement {
-            py::Statement::new().push(format!("{} = {}", input.1, input.0))
+            py::Statement::Raw(format!("if code == {}: return \"{}\"", input.0, input.1))
         }
     }
 }

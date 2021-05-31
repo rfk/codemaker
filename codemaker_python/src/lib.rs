@@ -16,6 +16,10 @@
 
 //! # Generate Python code using the `codemaker` crate.
 
+use codemaker::FluentAPI;
+
+const INDENT: &'static str = "    ";
+
 pub struct Package {
     dirpath: std::path::PathBuf,
     root_module: Module,
@@ -35,27 +39,30 @@ impl Package {
         }
     }
 
-    pub fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
-        func(&mut self);
-        return self
-    }
-
     fn with_root_module<F: FnOnce(Module) -> Module>(mut self, func: F) -> Self {
         self.root_module = func(self.root_module);
         self
     }
+}
 
-    pub fn add_submodule(mut self, mut m: Module) -> Self {
-        m.filepath = self.dirpath.join(m.filepath.as_path());
-        self.submodules.push(m);
-        return self;
+impl FluentAPI for Package {}
+
+impl Extend<Module> for Package {
+    fn extend<T: IntoIterator<Item=Module>>(&mut self, iter: T) {
+        for mut m in iter {
+            m.filepath = self.dirpath.join(m.filepath.as_path());
+            self.submodules.push(m);
+        }
     }
+}
 
-    pub fn add_subpackage(mut self, mut p: Package) -> Self {
-        // TODO: need to adjust nested filepaths, that's kinda gross...
-        p.dirpath = self.dirpath.join(p.dirpath.as_path());
-        self.subpackages.push(p);
-        return self;
+impl Extend<Package> for Package {
+    fn extend<T: IntoIterator<Item=Package>>(&mut self, iter: T) {
+        for mut p in iter {
+            // TODO: need to adjust nested filepaths, that's kinda gross...
+            p.dirpath = self.dirpath.join(p.dirpath.as_path());
+            self.subpackages.push(p);
+        }
     }
 }
 
@@ -82,21 +89,6 @@ impl Module {
             statements: vec![],
         }
     }
-
-    pub fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
-        func(&mut self);
-        return self
-    }
-
-    pub fn push(mut self, stmt: Statement) -> Self {
-        self.statements.push(stmt);
-        self
-    }
-
-    pub fn extend(mut self, stmts: impl Iterator<Item=Statement>) -> Self {
-        self.statements.extend(stmts);
-        self
-    }
 }
 
 impl codemaker::OutputFile for Module {
@@ -105,31 +97,119 @@ impl codemaker::OutputFile for Module {
     }
     fn write_into<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         for stmt in &self.statements {
-            stmt.write_into(writer)?
+            stmt.write_into(writer, 0)?
         }
         Ok(())
     }
 }
 
-pub struct Statement {
-    lines: Vec<String>,
+impl FluentAPI for Module {}
+
+impl Extend<Statement> for Module {
+    fn extend<I: IntoIterator<Item=Statement>>(&mut self, iter: I) {
+        for item in iter {
+            self.statements.push(item);
+        }
+    }
+}
+
+
+pub enum Statement {
+    AssignStmt(Assignment),
+    FuncDefStmt(FunctionDefinition),
+    Raw(String),
 }
 
 
 impl Statement {
-    pub fn new() -> Self {
-        Statement { lines: vec![] }
-    }
-
-    pub fn push(mut self, line: String) -> Self {
-        self.lines.push(line);
-        self
-    }
-
-    fn write_into<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        for ln in &self.lines {
-            writeln!(writer, "{}", ln)?;
+    fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
+        match self {
+            Self::AssignStmt(a) => a.write_into(writer, indent)?,
+            Self::FuncDefStmt(f) => f.write_into(writer, indent)?,
+            Self::Raw(ln) => writeln!(writer, "{}{}", INDENT.repeat(indent), ln)?,
         }
         Ok(())
+    }
+}
+
+pub struct Assignment {
+    target: String,  // TODO, could also be item assigment etc
+    value: String,   // TODO: should be generic "Expression" type.
+}
+
+impl Assignment {
+    pub fn new(target: String, value: String) -> Self {
+        Assignment { target, value }
+    }
+
+    fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
+        writeln!(writer, "{}{} = {}", INDENT.repeat(indent), self.target, self.value)?;
+        Ok(())
+    }
+}
+
+impl Into<Statement> for Assignment {
+    fn into(self) -> Statement {
+        Statement::AssignStmt(self)
+    }
+}
+
+
+pub struct FunctionDefinition {
+    name: String,
+    args: Vec<String>,      // TODO: a richer arg type, with defaults etc
+    body: Vec<Statement>,
+}
+
+impl FunctionDefinition {
+    pub fn new(name: String) -> Self {
+        FunctionDefinition { name, args: vec![], body: vec![] }
+    }
+
+    pub fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
+        func(&mut self);
+        return self
+    }
+
+    fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
+        write!(writer, "{}def {}(", INDENT.repeat(indent), self.name)?;
+        for arg in &self.args {
+            write!(writer, "{},", arg)?;
+        }
+        writeln!(writer, "):")?;
+        if self.body.is_empty() {
+            writeln!(writer, "{}pass", INDENT.repeat(indent+1))?;
+        } else {
+            for stmt in &self.body {
+                stmt.write_into(writer, indent + 1)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn add_arg(mut self, name: String) -> Self {
+        self.args.push(name);
+        return self;
+    }
+
+    pub fn push<T: Into<Statement>>(mut self, stmt: T) -> Self {
+        self.body.push(stmt.into());
+        return self;
+    }
+}
+
+impl Into<Statement> for FunctionDefinition {
+    fn into(self) -> Statement {
+        Statement::FuncDefStmt(self)
+    }
+}
+
+impl FluentAPI for FunctionDefinition {}
+
+impl Extend<Statement> for FunctionDefinition {
+    fn extend<I: IntoIterator<Item=Statement>>(&mut self, iter: I) {
+        for item in iter {
+            self.body.push(item);
+        }
     }
 }
