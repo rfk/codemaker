@@ -10,6 +10,9 @@ edition = "2018"
 [dependencies]
 codemaker = { path = "../codemaker", version = "0.0.1"}
 codemaker_python = { path = "../codemaker_python", version = "0.0.1"}
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8"
+heck = "0.3"
 
 [[bin]]
 name = "codemaker-sample"

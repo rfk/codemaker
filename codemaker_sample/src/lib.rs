@@ -16,62 +16,70 @@
 
 //! # A sample crate that uses `codemaker`.
 
-use codemaker::{define_codemaker_rules, CodeMaker, CodeMakerRule, Extend};
+use serde::Deserialize;
+use heck::ShoutySnakeCase;
+
+use codemaker::{define_codemaker_rules, define_stateless_codemaker, CodeMaker};
 use codemaker_python as py;
 
+/// This is our input data, a list of numeric codes and their
+/// corresponding status message. A real app would work with something
+/// a good deal more elaborate than this of course.
+#[derive(Debug, Deserialize)]
 pub struct StatusCodes {
     pub codes: Vec<(u16, String)>,
 }
 
-pub struct PythonStatusModuleMaker {
+/// This is our top-level "Maker", which knows how to convert
+/// the input data into a Python module.
+pub struct StatusModuleMaker {
     pub module_name: String,
 }
 
-impl<'a> CodeMaker<'a> for PythonStatusModuleMaker
-{
+impl<'a> CodeMaker<'a> for StatusModuleMaker {
     type Input = &'a StatusCodes;
     type Output = py::Module;
 }
 
+// These are the rules by which to convert input to output.
 define_codemaker_rules! {
-    PythonStatusModuleMaker as self {
+    StatusModuleMaker as self {
 
         /// The main top-level conversion.
+        /// This makes the python module, pushing a definition for each
+        /// individual code plus
         &StatusCodes as input => py::Module {
             py::Module::new(self.module_name.as_str())
                 .extend(self.make_from_iter(input.codes.iter()))
-                .push(MakeCodeLookupFunc::make_from(input))
+                .push(CodeLookupFunc::make_from(input))
         }
 
-        // Each individiual code entry becomes a global variable assignment.
+        /// Each individiual code entry becomes a global variable assignment,
+        /// with its name converted to a proper python variable name. A future
+        /// enhancement might has a helper like `py::Constant` or similar that
+        /// can do the idiomatic casing for you transparently.
         &(u16, String) as (code, name) => py::Assignment {
-            py::Assignment::new(name.clone(), format!("{}", code))
+            py::Assignment::new(name.to_shouty_snake_case(), format!("{}", code))
         }
     }
 }
 
-pub struct MakeCodeLookupFunc { }
-
-impl MakeCodeLookupFunc {
-    fn make_from<Input, Output>(input: Input) -> Output
-    where
-        Self: CodeMakerRule<Input, Output>
-    {
-        CodeMakerRule::make_from(&MakeCodeLookupFunc {}, input)
-    }
-}
-
-define_codemaker_rules! {
-    MakeCodeLookupFunc as self {
-
+define_stateless_codemaker! {
+    /// Make a function for looking up the string for an integer status code.
+    ///
+    /// This generates a python function named `status_for_code` which will accept
+    /// an integer status code and return the corresponding status string, or None
+    /// if the code is unknown.
+    CodeLookupFunc {
         &StatusCodes as input => py::FunctionDefinition {
-            py::FunctionDefinition::new("status_for_code".into())
-                .add_arg("code".into())
-                .extend(self.make_from_iter(input.codes.iter()))
+            py::FunctionDefinition::new("status_for_code")
+                .add_arg("code")
+                .extend(input.codes.iter().map(Self::make_from))
+                .push(py::Statement::new_raw("return None"))
         }
-
-        &(u16, String) as input => py::Statement {
-            py::Statement::Raw(format!("if code == {}: return \"{}\"", input.0, input.1))
+        &(u16, String) as (code, status) => py::Statement {
+            // Haven't implemented `if` statements yet...
+            py::Statement::Raw(format!("if code == {}: return \"{}\"", code, status))
         }
     }
 }

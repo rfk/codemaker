@@ -184,6 +184,18 @@
 #[cfg(test)]
 mod tests;
 
+/// A convenience module for bringing `codemaker` traits into scope.
+///
+/// Consumers of this module are encourated to use-all from this submodule
+/// in order to get convenient access to the core traits of this crate:
+///
+/// ```ignore
+/// use codemaker::traits::*;
+/// ```
+pub mod traits {
+    pub use super::{CodeMaker, CodeMakerRule, Extend, FluentAPI, StatelessCodeMakerRule};
+}
+
 /// A set of files produced by making some code.
 ///
 /// This trait represents the end result of the code-generation process as a set of files
@@ -246,6 +258,96 @@ pub trait OutputFile {
     fn write_into<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
 }
 
+/// A helper trait for defining fluent-style builder APIs.
+///
+/// A [`codemaker`] target crate is expected to provide a convenient builder-style API
+/// for assembling fragments of code in the target language, likely in the form of a
+/// "fluent"-style builder API where the caller chains a series of method calls to
+/// incrementally set the internal state of an struct to the desired value.
+///
+/// This is a small helper trait to make defining such APIs more convenient. It provides
+/// a convenience method `edit()` which will accept and return a mutable owned instance,
+/// and invoke a closure on a mutable *reference* to that instance. That may not seem like
+/// much, but it helps us map more traditional mutation-based Rust APIs into the fluent
+/// builder style.
+pub trait FluentAPI: Sized {
+    /// Execute a closure on a mutable reference to `self`, then return `self` by value.
+    ///
+    /// This method is provided as a default impl on the `FluentAPI` trait, and it lets
+    /// you turn a series of mutations like this:
+    ///
+    /// ```ignore
+    /// let mut obj = SomeFoo::new();
+    /// obj.change_something();
+    /// obj.change_something_else();
+    /// return obj;
+    /// ```
+    ///
+    /// Into a chain of method calls like this:
+    ///
+    /// ```ignore
+    /// return SomeFoo::new()
+    ///     .edit(|me| me.change_something())
+    ///     .edit(|me| me.change_something_else())
+    /// ```
+    ///
+    /// Which...well that's maybe not very convenient in and of itself, but if you wrap
+    /// some helper methods around those closures, it can make a very nice builder interface.
+    fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
+        func(&mut self);
+        return self;
+    }
+}
+
+/// A Fluent-style variant of the stdlib `Extend` trait.
+///
+/// The codemaker [`Extend`] trait is similar to the builtin [`std::iter::Extend`] trait,
+/// except designed for use in a fluent-style builder API:
+///
+///   * Takes and returns `self` by owned value, rather than mutable reference.
+///   * Aggressively calls `Into::into` for your convenience.
+///   * Has a helper method for adding a single item.
+///
+/// You can get this functionality for free for any [`FluentAPI`] that is [`std::iter::Extend`],
+/// just by bringing this replacement [`Extend`] trait into scope.
+pub trait Extend<Item>: std::iter::Extend<Item> + FluentAPI {
+    /// Fluently extend a collection with values from an iterator.
+    ///
+    /// This method is intended for easily adding items to a collection as part
+    /// of a fluent-style builder API, like so:
+    ///
+    /// ```ignore
+    /// return SomeCollection::new()
+    ///     .extend(make_some_items())
+    ///     .extend(and_some_more_items())
+    /// ```
+    ///
+    /// The iterator may yield any items that implement `Into<Item>` for the
+    /// target collection.
+    fn extend<I: Into<Item>, Iter: IntoIterator<Item = I>>(self, iter: Iter) -> Self {
+        self.edit(|me| std::iter::Extend::extend(me, iter.into_iter().map(Into::into)))
+    }
+
+    /// Fluently add a single item to a collection.
+    ///
+    /// This method is intended for easily adding individual items to a collection as part
+    /// of a fluent-style builder API, like so:
+    ///
+    /// ```ignore
+    /// return SomeCollection::new()
+    ///     .extend(make_some_items())
+    ///     .push(SingleItem::new())
+    /// ```
+    ///
+    /// It accepts any type that implement `Into<Item>` for the target collection.
+    fn push<I: Into<Item>>(self, item: I) -> Self {
+        self.extend(std::iter::once(item))
+    }
+}
+
+/// Blanket impl of [`Extend`] for any [`FluentAPI`] that is [`std::iter::Extend`].
+impl<T, Item> Extend<Item> for T where T: std::iter::Extend<Item> + FluentAPI {}
+
 /// Automatic impl of [`OutputFileSet`] for any [`OutputFile`].
 ///
 /// This is a convenience implementation for rendering a single output file to disk,
@@ -306,7 +408,6 @@ pub trait CodeMakerRule<Input, Output> {
     /// each desired input type and corresponding output type.
     fn make_from(&self, input: Input) -> Output;
 
-
     /// Conveniently map `make_from` over an iterator.
     ///
     /// This is a convenience method to map a [`CodeMakerRule`] over an iterator without having
@@ -317,10 +418,13 @@ pub trait CodeMakerRule<Input, Output> {
     /// Since we cannot use `impl Iterator` in a trait definition, we provide a concrete helper
     /// struct [`CodeMakerRuleMap`] that implements it for us. Please treat this struct as an
     /// internal implementation detail.
-    fn make_from_iter<'a, I>(&'a self, input: I) -> CodeMakerRuleMap<'a, Input, Output, Self, I::IntoIter>
+    fn make_from_iter<'a, I>(
+        &'a self,
+        input: I,
+    ) -> CodeMakerRuleMap<'a, Input, Output, Self, I::IntoIter>
     where
         Self: CodeMakerRule<Input, Output>,
-        I: IntoIterator<Item=Input> + 'a,
+        I: IntoIterator<Item = Input> + 'a,
         Self: Sized,
         Input: 'a,
         Output: 'a,
@@ -404,6 +508,11 @@ macro_rules! define_codemaker_rules {
             $(#[$($attr)+])*
             impl $crate::CodeMakerRule<$In, $Out> for $CM {
                 fn make_from(&$self, $input: $In) -> $Out {
+                    // Let the method body use any of our traits.
+                    // This seems unhygienic, but works, and is almost
+                    // certainly what the consumer wants.
+                    #[allow(unused_imports)]
+                    use $crate::traits::*;
                     $body
                 }
             }
@@ -411,21 +520,102 @@ macro_rules! define_codemaker_rules {
     };
 }
 
-
-pub trait FluentAPI : Sized {
-    fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
-        func(&mut self);
-        return self
-    }
+/// An individual rule for statelessly making code by structural matching.
+///
+/// Much like the [`CodeMakerRule`] trait, each impl of [`StatelessCodeMakerRule`]
+/// defines a conversion from an input data struture into an output data structure.
+/// The difference is that a [`StatelessCodeMakerRule`] implements the conversion as
+/// an associated function on the type itself rather than an instance method.
+///
+/// Implementing this trait by hand is possible, but cumbersome; consider using the
+/// [`define_stateless_codemaker`] macro to simplify the process of defining a type
+/// and its rules, or the [`define_stateless_codemaker_rules!`] macro to specify rules
+/// on an existing type.
+pub trait StatelessCodeMakerRule<Input, Output> {
+    /// Make an instance of the output type from an instance of the input type.
+    ///
+    /// Consumers should provide a concrete implementation of this associated function
+    /// for each desired input type and corresponding output type.
+    fn make_from(input: Input) -> Output;
 }
 
-pub trait Extend<Item>: std::iter::Extend<Item> + FluentAPI {
-    fn extend<I: Into<Item>, Iter: IntoIterator<Item=I>>(self, iter: Iter) -> Self {
-        self.edit(|me| std::iter::Extend::extend(me, iter.into_iter().map(Into::into)))
-    }
-    fn push<I: Into<Item>>(self, item: I) -> Self {
-        self.extend(std::iter::once(item))
-    }
+/// Macro for defining a [`StatelessCodeMaker`] type and its associated rules.
+///
+/// There's a fair bit of boilerplate involved in defining a type to implement
+/// [`StatelessCodeMakerRule`], since the type needs a boilerplate empty definition
+/// and each Input/Output pair needs its own trait implementation. This macro helps
+/// avoid a lot of the boilerplate by turning a call like this:
+///
+/// ```ignore
+/// define_stateless_codemaker!{
+///     MyCodeMaker {
+///         InputType1 as input => OutputType1 {
+///             somehow_do_the_making(input)
+///         }
+///         InputType2 as input => OutputType2 {
+///             Self::do_different_making(input)
+///         }
+///         // ... and so on ...
+///     }
+/// }
+/// ```
+///
+/// Into a type definition for `MyCodeMaker` and a suite of [`StatelessCodeMakerRule`]
+/// implementations on that type, one for each of the provided `InputType`/`OutputType`
+/// pairs.
+///
+/// If you have an existing type to which you'd like to add [`StatelessCodeMakerRule`]
+/// impls, the [`define_stateless_codemaker_rules`] macro may be more suitable.
+#[macro_export]
+macro_rules! define_stateless_codemaker {
+    ($(#[$($attr:tt)+])* $v:vis $CM:ident {
+        $($rules:tt)*
+    }) => {
+        $(#[$($attr)+])*
+        $v struct $CM { }
+        $crate::define_stateless_codemaker_rules!{ $CM { $($rules)*} }
+    };
 }
 
-impl<T, Item> Extend<Item> for T where T: std::iter::Extend<Item> + FluentAPI {}
+/// Macro for defining a suite of [`StatelessCodeMakerRule`] implementations.
+///
+/// There's a fair bit of boilerplate involved in defining [`StatelessCodeMakerRule`]
+/// impls, each Input/Output pair needs its own trait implementation. This macro helps
+/// avoid a lot of the boilerplate by turning a call like this:
+///
+/// ```ignore
+/// define_stateless_codemaker_rules!{
+///     MyCodeMaker {
+///         InputType1 as input => OutputType1 {
+///             somehow_do_the_making(input)
+///         }
+///         InputType2 as input => OutputType2 {
+///             Self::do_different_making(input)
+///         }
+///         // ... and so on ...
+///     }
+/// }
+/// ```
+///
+/// Into a suite of [`StatelessCodeMakerRule`] implementations on that type, one for each of
+/// the provided `InputType`/`OutputType` pairs.
+#[macro_export]
+macro_rules! define_stateless_codemaker_rules {
+    ($CM:ty {
+        $( $(#[$($attr:tt)+])* $In:ty as $input:pat => $Out:ty $body:block )*
+    }) => {
+        $(
+            $(#[$($attr)+])*
+            impl $crate::StatelessCodeMakerRule<$In, $Out> for $CM {
+                fn make_from($input: $In) -> $Out {
+                    // Let the method body use any of our traits.
+                    // This seems unhygienic, but works, and is almost
+                    // certainly what the consumer wants.
+                    #[allow(unused_imports)]
+                    use $crate::traits::*;
+                    $body
+                }
+            }
+        )*
+    };
+}

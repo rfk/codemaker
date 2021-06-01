@@ -14,20 +14,39 @@
  * See the Licenses for the specific language governing permissions and
  * limitations under the Licenses. */
 
+//! A small sample program to try out `codemaker` crates.
+//!
+//! This is a small program that reads a list of numeric codes and their
+//! corresponding status text from a file `status_codes.yaml`, and uses
+//! that data to generate a Python module containing:
+//!
+//!  - a named constant for each status message, mapping to the code.
+//!  - a function `status_for_code` that will map a code to its status text.
+//!
+//! That's not a very exciting piece of generated code, but it's a nice
+//! little exercise in seeing whether this whole thing is a good idea.
+
 use codemaker::{CodeMaker, OutputFileSet};
-use codemaker_sample::{PythonStatusModuleMaker, StatusCodes};
+use codemaker_sample::{StatusModuleMaker, StatusCodes};
 
 fn main() -> std::io::Result<()> {
-    let codes = StatusCodes {
-        codes: vec![
-            (100, "Continue".into()),
-            (200, "OK".into()),
-            (404, "Not Found".into()),
-        ],
-    };
-    let maker = PythonStatusModuleMaker {
+    // Read the input data into our source data structure.
+    let codes: StatusCodes = serde_yaml::from_str(
+        std::fs::read_to_string("status_codes.yaml")
+            .unwrap()
+            .as_str(),
+    )
+    .unwrap();
+
+    // Configure the Maker with the name of the output module.
+    let maker = StatusModuleMaker {
         module_name: "status_codes".into(),
     };
-    maker.make(&codes).write_into_dir("./")?;
+
+    // Convert the input data into a Python module.
+    let output = maker.make(&codes);
+
+    // Wwrite it out to disk.
+    output.write_into_dir("./")?;
     Ok(())
 }

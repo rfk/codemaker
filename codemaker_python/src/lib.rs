@@ -15,10 +15,27 @@
  * limitations under the Licenses. */
 
 //! # Generate Python code using the `codemaker` crate.
+//!
+//! This is an initial experiment in structural generation of Python
+//! code from Rust. We'll see how it works out...
 
-use codemaker::FluentAPI;
+use codemaker::traits::*;
 
 const INDENT: &'static str = "    ";
+
+macro_rules! indented_writeln {
+    ($writer:expr, $indent:expr, $fmt:literal $($tail:tt)*) => {
+        writeln!($writer, concat!("{}", $fmt), INDENT.repeat($indent) $($tail)*)
+    };
+}
+
+macro_rules! indented_write {
+    ($writer:expr, $indent:expr, $fmt:literal $($tail:tt)*) => {
+        write!($writer, concat!("{}", $fmt), INDENT.repeat($indent) $($tail)*)
+    };
+}
+
+/// A Python package, the highest-level output format for Python code.
 
 pub struct Package {
     dirpath: std::path::PathBuf,
@@ -28,27 +45,44 @@ pub struct Package {
 }
 
 impl Package {
-    pub fn new(name: &str) -> Self {
+    pub fn new<T: Into<String>>(name: T) -> Self {
+        let name = name.into();
         Package {
-            dirpath: std::path::PathBuf::from(name),
+            dirpath: std::path::PathBuf::from(name.clone()),
             root_module: Module::new("__init__").edit(|m| {
-                m.filepath =  std::path::PathBuf::from(name).join(m.filepath.as_path());
+                m.filepath = std::path::PathBuf::from(name).join(m.filepath.as_path());
             }),
             submodules: vec![],
             subpackages: vec![],
         }
     }
+}
 
-    fn with_root_module<F: FnOnce(Module) -> Module>(mut self, func: F) -> Self {
-        self.root_module = func(self.root_module);
-        self
+impl codemaker::OutputFileSet for Package {
+    type OutputFile = Module;
+    fn files(&self) -> Vec<&Self::OutputFile> {
+        vec![&self.root_module]
+            .into_iter()
+            .chain(self.submodules.iter())
+            .chain(self.subpackages.iter().map(|p| p.files()).flatten())
+            .collect()
     }
 }
 
 impl FluentAPI for Package {}
 
-impl Extend<Module> for Package {
-    fn extend<T: IntoIterator<Item=Module>>(&mut self, iter: T) {
+/// Adding Statements to a Package, puts them in its root module.
+impl std::iter::Extend<Statement> for Package {
+    fn extend<T: IntoIterator<Item = Statement>>(&mut self, iter: T) {
+        for stmt in iter {
+            self.root_module.statements.push(stmt);
+        }
+    }
+}
+
+/// Adding Modules to a Package, creates sub-modules.
+impl std::iter::Extend<Module> for Package {
+    fn extend<T: IntoIterator<Item = Module>>(&mut self, iter: T) {
         for mut m in iter {
             m.filepath = self.dirpath.join(m.filepath.as_path());
             self.submodules.push(m);
@@ -56,8 +90,9 @@ impl Extend<Module> for Package {
     }
 }
 
-impl Extend<Package> for Package {
-    fn extend<T: IntoIterator<Item=Package>>(&mut self, iter: T) {
+/// Adding Packages to a Package, creates sub-packages.
+impl std::iter::Extend<Package> for Package {
+    fn extend<T: IntoIterator<Item = Package>>(&mut self, iter: T) {
         for mut p in iter {
             // TODO: need to adjust nested filepaths, that's kinda gross...
             p.dirpath = self.dirpath.join(p.dirpath.as_path());
@@ -66,16 +101,7 @@ impl Extend<Package> for Package {
     }
 }
 
-impl codemaker::OutputFileSet for Package {
-    type OutputFile = Module;
-    fn files(&self) -> Vec<&Self::OutputFile> {
-        vec![&self.root_module].into_iter().chain(
-            self.submodules.iter()
-        ).chain(
-            self.subpackages.iter().map(|p| p.files()).flatten()
-        ).collect()
-    }
-}
+/// A Python module, a single file containing Python source code.
 
 pub struct Module {
     filepath: std::path::PathBuf,
@@ -83,7 +109,8 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn new(name: &str) -> Self {
+    pub fn new<T: AsRef<str>>(name: T) -> Self {
+        let name = name.as_ref();
         Module {
             filepath: std::path::PathBuf::from(format!("{}.py", name)),
             statements: vec![],
@@ -105,80 +132,93 @@ impl codemaker::OutputFile for Module {
 
 impl FluentAPI for Module {}
 
-impl Extend<Statement> for Module {
-    fn extend<I: IntoIterator<Item=Statement>>(&mut self, iter: I) {
+impl std::iter::Extend<Statement> for Module {
+    fn extend<I: IntoIterator<Item = Statement>>(&mut self, iter: I) {
         for item in iter {
             self.statements.push(item);
         }
     }
 }
 
-
+/// A Statement, any of a several kinds of executable chunk of Python source code.
+///
+/// This is an Enum to allow different kinds of Statement to be conveniently stored
+/// in a single list. For actually builting the API, you almost certainly want to use
+/// one of the contained types like [`Assignment`] or [`FunctionDefinition`].
 pub enum Statement {
-    AssignStmt(Assignment),
-    FuncDefStmt(FunctionDefinition),
+    Assign(Assignment),
+    FuncDef(FunctionDefinition),
     Raw(String),
 }
 
-
 impl Statement {
+    pub fn new_raw<T: Into<String>>(stmt: T) -> Statement {
+        Statement::Raw(stmt.into())
+    }
+
     fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
         match self {
-            Self::AssignStmt(a) => a.write_into(writer, indent)?,
-            Self::FuncDefStmt(f) => f.write_into(writer, indent)?,
-            Self::Raw(ln) => writeln!(writer, "{}{}", INDENT.repeat(indent), ln)?,
+            Self::Assign(a) => a.write_into(writer, indent)?,
+            Self::FuncDef(f) => f.write_into(writer, indent)?,
+            Self::Raw(ln) => indented_writeln!(writer, indent, "{}", ln)?,
         }
         Ok(())
     }
 }
 
 pub struct Assignment {
-    target: String,  // TODO, could also be item assigment etc
-    value: String,   // TODO: should be generic "Expression" type.
+    target: String, // TODO, could also be item assigment etc
+    value: String,  // TODO: should be generic "Expression" type.
 }
 
 impl Assignment {
-    pub fn new(target: String, value: String) -> Self {
-        Assignment { target, value }
+    pub fn new<T1: Into<String>, T2: Into<String>>(target: T1, value: T2) -> Self {
+        Assignment {
+            target: target.into(),
+            value: value.into(),
+        }
     }
 
     fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
-        writeln!(writer, "{}{} = {}", INDENT.repeat(indent), self.target, self.value)?;
+        indented_writeln!(writer, indent, "{} = {}", self.target, self.value)?;
         Ok(())
     }
 }
 
 impl Into<Statement> for Assignment {
     fn into(self) -> Statement {
-        Statement::AssignStmt(self)
+        Statement::Assign(self)
     }
 }
 
-
 pub struct FunctionDefinition {
     name: String,
-    args: Vec<String>,      // TODO: a richer arg type, with defaults etc
+    args: Vec<String>, // TODO: a richer arg type, with defaults etc
     body: Vec<Statement>,
 }
 
 impl FunctionDefinition {
-    pub fn new(name: String) -> Self {
-        FunctionDefinition { name, args: vec![], body: vec![] }
+    pub fn new<T: Into<String>>(name: T) -> Self {
+        FunctionDefinition {
+            name: name.into(),
+            args: vec![],
+            body: vec![],
+        }
     }
 
     pub fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
         func(&mut self);
-        return self
+        return self;
     }
 
     fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
-        write!(writer, "{}def {}(", INDENT.repeat(indent), self.name)?;
+        indented_write!(writer, indent, "def {}(", self.name)?;
         for arg in &self.args {
             write!(writer, "{},", arg)?;
         }
         writeln!(writer, "):")?;
         if self.body.is_empty() {
-            writeln!(writer, "{}pass", INDENT.repeat(indent+1))?;
+            indented_writeln!(writer, indent, "pass")?;
         } else {
             for stmt in &self.body {
                 stmt.write_into(writer, indent + 1)?;
@@ -187,8 +227,8 @@ impl FunctionDefinition {
         Ok(())
     }
 
-    pub fn add_arg(mut self, name: String) -> Self {
-        self.args.push(name);
+    pub fn add_arg<T: Into<String>>(mut self, name: T) -> Self {
+        self.args.push(name.into());
         return self;
     }
 
@@ -200,14 +240,14 @@ impl FunctionDefinition {
 
 impl Into<Statement> for FunctionDefinition {
     fn into(self) -> Statement {
-        Statement::FuncDefStmt(self)
+        Statement::FuncDef(self)
     }
 }
 
 impl FluentAPI for FunctionDefinition {}
 
-impl Extend<Statement> for FunctionDefinition {
-    fn extend<I: IntoIterator<Item=Statement>>(&mut self, iter: I) {
+impl std::iter::Extend<Statement> for FunctionDefinition {
+    fn extend<I: IntoIterator<Item = Statement>>(&mut self, iter: I) {
         for item in iter {
             self.body.push(item);
         }
