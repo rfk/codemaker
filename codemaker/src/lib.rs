@@ -258,6 +258,21 @@ pub trait OutputFile {
     fn write_into<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
 }
 
+/// Automatic impl of [`OutputFileSet`] for any [`OutputFile`].
+///
+/// This is a convenience implementation for rendering a single output file to disk,
+/// provided automatically since there's really only one sensible way to represent
+/// a set containing a single item.
+impl<T> OutputFileSet for T
+where
+    T: OutputFile,
+{
+    type OutputFile = Self;
+    fn files(&self) -> Vec<&Self> {
+        vec![self]
+    }
+}
+
 /// A helper trait for defining fluent-style builder APIs.
 ///
 /// A [`codemaker`] target crate is expected to provide a convenient builder-style API
@@ -347,21 +362,6 @@ pub trait Extend<Item>: std::iter::Extend<Item> + FluentAPI {
 
 /// Blanket impl of [`Extend`] for any [`FluentAPI`] that is [`std::iter::Extend`].
 impl<T, Item> Extend<Item> for T where T: std::iter::Extend<Item> + FluentAPI {}
-
-/// Automatic impl of [`OutputFileSet`] for any [`OutputFile`].
-///
-/// This is a convenience implementation for rendering a single output file to disk,
-/// provided automatically since there's really only one sensible way to represent
-/// a set containing a single item.
-impl<T> OutputFileSet for T
-where
-    T: OutputFile,
-{
-    type OutputFile = Self;
-    fn files(&self) -> Vec<&Self> {
-        vec![self]
-    }
-}
 
 /// Top-level abstraction for converting a data structure into some code.
 ///

@@ -21,4 +21,4 @@ doing at Mozilla for projects like [UniFFI](https://github.com/mozilla/uniffi-rs
 and [Glean](https://github.com/mozilla/glean/). There are no plans to
 replace the code-generation backends of those projects with this work,
 it's just me toying around with some ideas. (But hey, if they turn out
-to be *good* ideas, then who knows :grin:)
+to be *good* ideas, then who knows :grin:).

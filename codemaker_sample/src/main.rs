@@ -27,7 +27,7 @@
 //! little exercise in seeing whether this whole thing is a good idea.
 
 use codemaker::{CodeMaker, OutputFileSet};
-use codemaker_sample::{StatusModuleMaker, StatusCodes};
+use codemaker_sample::{StatusCodes, StatusModuleMaker};
 
 fn main() -> std::io::Result<()> {
     // Read the input data into our source data structure.

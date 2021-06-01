@@ -16,8 +16,8 @@
 
 //! # A sample crate that uses `codemaker`.
 
-use serde::Deserialize;
 use heck::ShoutySnakeCase;
+use serde::Deserialize;
 
 use codemaker::{define_codemaker_rules, define_stateless_codemaker, CodeMaker};
 use codemaker_python as py;
