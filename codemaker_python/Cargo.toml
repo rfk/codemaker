@@ -9,3 +9,4 @@ edition = "2018"
 
 [dependencies]
 codemaker = { path = "../codemaker", version = "0.0.1"}
+codemaker_python_macros = { path = "../codemaker_python_macros", version = "0.0.1"}

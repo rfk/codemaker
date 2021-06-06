@@ -181,6 +181,7 @@
 //! ```
 //!
 
+
 #[cfg(test)]
 mod tests;
 
@@ -537,6 +538,59 @@ pub trait StatelessCodeMakerRule<Input, Output> {
     /// Consumers should provide a concrete implementation of this associated function
     /// for each desired input type and corresponding output type.
     fn make_from(input: Input) -> Output;
+
+    /// Conveniently map `make_from` over an iterator.
+    ///
+    /// This is a convenience method to map a [`StatelessCodeMakerRule`] over an iterator without having
+    /// having to explicitly construct the iterator and map. It can turn any `IntoIterator<Item=Input>` into
+    /// an `Iterator<Item=Output>` for any of its possible `Input` and `Output` types supported by
+    /// the trait implementor.
+    ///
+    /// Since we cannot use `impl Iterator` in a trait definition, we provide a concrete helper
+    /// struct [`StatelessCodeMakerRuleMap`] that implements it for us. Please treat this struct as an
+    /// internal implementation detail.
+    fn make_from_iter<'a, I>(
+        input: I,
+    ) -> StatelessCodeMakerRuleMap<Input, Output, Self, I::IntoIter>
+    where
+        Self: StatelessCodeMakerRule<Input, Output>,
+        I: IntoIterator<Item = Input> + 'a,
+        Input: 'a,
+        Output: 'a,
+    {
+        StatelessCodeMakerRuleMap {
+            iter: input.into_iter(),
+            phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Iterator mapping a [`StatelessCodeMakerRule`] over an input sequence.
+///
+/// This is a small helper struct for implementing [`StatelessCodeMakerRule`] over iterators
+/// in a way that plays nicely with generics and lifetimes. We use it as the return type
+/// of the trait default implementation, because we can't return `impl Iterator` from trait
+/// methods and we don't want to have to box things.
+pub struct StatelessCodeMakerRuleMap<Input, Output, T, I>
+where
+    T: StatelessCodeMakerRule<Input, Output> + ?Sized + 'static,
+    I: Iterator<Item = Input>,
+{
+    iter: I,
+    // Not sure why this is needed, but Rust complains at me
+    // about `Output` and `T` being unconstrained if I dont have it...
+    phantom: std::marker::PhantomData<(Output, &'static T)>,
+}
+
+impl<Input, Output, T, I> Iterator for StatelessCodeMakerRuleMap<Input, Output, T, I>
+where
+    T: StatelessCodeMakerRule<Input, Output>,
+    I: Iterator<Item = Input>,
+{
+    type Item = Output;
+    fn next(&mut self) -> Option<Output> {
+        self.iter.next().map(|i| T::make_from(i))
+    }
 }
 
 /// Macro for defining a [`StatelessCodeMaker`] type and its associated rules.
@@ -601,21 +655,33 @@ macro_rules! define_stateless_codemaker {
 /// the provided `InputType`/`OutputType` pairs.
 #[macro_export]
 macro_rules! define_stateless_codemaker_rules {
+    // Base case.
+    ($CM:ty { }) => {};
+    // Fiddly quoting macro syntax
     ($CM:ty {
-        $( $(#[$($attr:tt)+])* $In:ty as $input:pat => $Out:ty $body:block )*
+        $(#[$($attr:tt)+])* $In:ty as $input:pat => @ $quoted_rule:path : $Out:ident ! { $($body:tt)* } $($tail:tt)*
     }) => {
-        $(
-            $(#[$($attr)+])*
-            impl $crate::StatelessCodeMakerRule<$In, $Out> for $CM {
-                fn make_from($input: $In) -> $Out {
-                    // Let the method body use any of our traits.
-                    // This seems unhygienic, but works, and is almost
-                    // certainly what the consumer wants.
-                    #[allow(unused_imports)]
-                    use $crate::traits::*;
-                    $body
-                }
+        $crate::define_stateless_codemaker_rules! {
+            $CM {
+                $(#[$($attr)+])* $In as $input => $quoted_rule![type $Out] { $quoted_rule! {body $Out $($body)* } } $($tail)*
             }
-        )*
+        }
+    };
+    // Ordinary definition syntax.
+    ($CM:ty {
+        $(#[$($attr:tt)+])* $In:ty as $input:pat => $Out:ty $body:block $($tail:tt)*
+    }) => {
+        $(#[$($attr)+])*
+        impl $crate::StatelessCodeMakerRule<$In, $Out> for $CM {
+            fn make_from($input: $In) -> $Out {
+                // Let the method body use any of our traits.
+                // This seems unhygienic, but works, and is almost
+                // certainly what the consumer wants.
+                #[allow(unused_imports)]
+                use $crate::traits::*;
+                $body
+            }
+        }
+        $crate::define_stateless_codemaker_rules! { $CM { $($tail)* } }
     };
 }

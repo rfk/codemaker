@@ -21,6 +21,8 @@
 
 use codemaker::traits::*;
 
+pub use codemaker_python_macros::quoted_rule;
+
 const INDENT: &'static str = "    ";
 
 macro_rules! indented_writeln {
@@ -148,6 +150,8 @@ impl std::iter::Extend<Statement> for Module {
 pub enum Statement {
     Assign(Assignment),
     FuncDef(FunctionDefinition),
+    IfElse(IfElse),
+    Return(Return),
     Raw(String),
 }
 
@@ -160,6 +164,8 @@ impl Statement {
         match self {
             Self::Assign(a) => a.write_into(writer, indent)?,
             Self::FuncDef(f) => f.write_into(writer, indent)?,
+            Self::IfElse(ie) => ie.write_into(writer, indent)?,
+            Self::Return(r) => r.write_into(writer, indent)?,
             Self::Raw(ln) => indented_writeln!(writer, indent, "{}", ln)?,
         }
         Ok(())
@@ -167,7 +173,7 @@ impl Statement {
 }
 
 pub struct Assignment {
-    target: String, // TODO, could also be item assigment etc
+    target: String, // TODO: could also be item assigment etc
     value: String,  // TODO: should be generic "Expression" type.
 }
 
@@ -191,6 +197,32 @@ impl Into<Statement> for Assignment {
     }
 }
 
+pub struct Return {
+    value: Expression,
+}
+
+impl Return {
+    pub fn new<T: Into<Expression>>(value: T) -> Self {
+        Return {
+            value: value.into(),
+        }
+    }
+
+    fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
+        indented_write!(writer, indent, "return ")?;
+        self.value.write_into(writer)?;
+        writeln!(writer, "")?;
+        Ok(())
+    }
+}
+
+impl Into<Statement> for Return {
+    fn into(self) -> Statement {
+        Statement::Return(self)
+    }
+}
+
+
 pub struct FunctionDefinition {
     name: String,
     args: Vec<String>, // TODO: a richer arg type, with defaults etc
@@ -206,19 +238,22 @@ impl FunctionDefinition {
         }
     }
 
-    pub fn edit<F: FnOnce(&mut Self)>(mut self, func: F) -> Self {
-        func(&mut self);
-        return self;
-    }
-
     fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
         indented_write!(writer, indent, "def {}(", self.name)?;
-        for arg in &self.args {
-            write!(writer, "{},", arg)?;
+        let mut args = self.args.iter();
+        // Writing args, with nice commas.
+        match args.next() {
+            None => (),
+            Some(arg) => {
+                write!(writer, "{}", arg)?;
+                for arg in args {
+                    write!(writer, ", {}", arg)?;
+                }
+            }
         }
         writeln!(writer, "):")?;
         if self.body.is_empty() {
-            indented_writeln!(writer, indent, "pass")?;
+            indented_writeln!(writer, indent + 1, "pass")?;
         } else {
             for stmt in &self.body {
                 stmt.write_into(writer, indent + 1)?;
@@ -232,8 +267,8 @@ impl FunctionDefinition {
         return self;
     }
 
-    pub fn push<T: Into<Statement>>(mut self, stmt: T) -> Self {
-        self.body.push(stmt.into());
+    pub fn add_args<T: Into<String>, I: IntoIterator<Item=T>>(mut self, name: I) -> Self {
+        self.args.extend(name.into_iter().map(Into::into));
         return self;
     }
 }
@@ -251,5 +286,145 @@ impl std::iter::Extend<Statement> for FunctionDefinition {
         for item in iter {
             self.body.push(item);
         }
+    }
+}
+
+
+
+#[derive(Default)]
+pub struct Block {
+    body: Vec<Statement>,
+}
+
+impl Block {
+    pub fn new() -> Self {
+        Block { body: vec![] }
+    }
+
+    fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
+        if self.body.is_empty() {
+            indented_writeln!(writer, indent, "pass")?;
+        } else {
+            for stmt in &self.body {
+                stmt.write_into(writer, indent)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Block {
+    fn is_empty(&self) -> bool {
+        self.body.is_empty()
+    }
+}
+
+impl FluentAPI for Block {}
+
+impl std::iter::Extend<Statement> for Block {
+    fn extend<I: IntoIterator<Item = Statement>>(&mut self, iter: I) {
+        for item in iter {
+            self.body.push(item);
+        }
+    }
+}
+
+pub struct IfElse {
+    condition: Expression,
+    body_if: Block,
+    body_else: Block,
+}
+
+impl IfElse {
+    pub fn new<T: Into<Expression>>(condition: T) -> Self {
+        IfElse {
+            condition: condition.into(),
+            body_if: Block::new(),
+            body_else: Block::new(),
+        }
+    }
+
+    fn write_into<W: std::io::Write>(&self, writer: &mut W, indent: usize) -> std::io::Result<()> {
+        indented_write!(writer, indent, "if ")?;
+        self.condition.write_into(writer)?;
+        writeln!(writer, ":")?;
+        self.body_if.write_into(writer, indent + 1)?;
+        if ! self.body_else.is_empty() {
+            indented_writeln!(writer, indent, "else:")?;
+            self.body_else.write_into(writer, indent + 1)?;
+        }
+        Ok(())
+    }
+
+    pub fn with_body_if<F>(mut self, func: F) -> Self
+    where
+        F: FnOnce(Block) -> Block
+    {
+        self.body_if = func(std::mem::take(&mut self.body_if));
+        self
+    }
+
+    pub fn with_body_else<F>(mut self, func: F) -> Self
+    where
+        F: FnOnce(Block) -> Block
+    {
+        self.body_else = func(std::mem::take(&mut self.body_else));
+        self
+    }
+}
+
+impl Into<Statement> for IfElse {
+    fn into(self) -> Statement {
+        Statement::IfElse(self)
+    }
+}
+
+impl FluentAPI for IfElse {}
+
+
+pub enum Expression {
+    Equals(Box<Expression>, Box<Expression>),
+    Literal(String),
+    Variable(String),
+}
+
+impl Expression {
+    pub fn new_equals<T1: Into<Expression>, T2: Into<Expression>>(lhs: T1, rhs: T2) -> Self {
+        Expression::Equals(Box::new(lhs.into()), Box::new(rhs.into()))
+    }
+    pub fn new_variable<T: Into<String>>(name: T) -> Self {
+        Expression::Variable(name.into())
+    }
+    fn write_into<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        match self {
+            Self::Equals(lhs, rhs) => {
+                lhs.write_into(writer)?;
+                write!(writer, " == ")?;
+                rhs.write_into(writer)?;
+            },
+            Self::Literal(lit) => write!(writer, "{}", lit)?,
+            Self::Variable(name) => write!(writer, "{}", name)?,
+        }
+        Ok(())
+    }
+}
+
+impl From<&str> for Expression {
+    fn from(value: &str) -> Expression {
+        // TODO: escaping etc
+        Expression::Literal(format!("\"{}\"", value))
+    }
+}
+
+impl From<&String> for Expression {
+    fn from(value: &String) -> Expression {
+        // TODO: escaping etc
+        Expression::Literal(format!("\"{}\"", value))
+    }
+}
+
+impl From<&u16> for Expression {
+    fn from(value: &u16) -> Expression {
+        Expression::Literal(format!("{}", value))
     }
 }

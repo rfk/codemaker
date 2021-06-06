@@ -2,5 +2,6 @@
 members = [
   "codemaker",
   "codemaker_python",
+  "codemaker_python_macros",
   "codemaker_sample",
 ]

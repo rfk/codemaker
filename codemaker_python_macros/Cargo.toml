@@ -1,0 +1,16 @@
+[package]
+name = "codemaker_python_macros"
+version = "0.0.1"
+authors = ["Ryan Kelly <ryan@rfk.id.au>"]
+description = "A structured approach to generating source code"
+repository = "https://github.com/rfk/codemaker"
+license = "Apache-2.0 / MIT"
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "1.0", features = ["extra-traits"] }

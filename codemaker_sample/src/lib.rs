@@ -15,6 +15,7 @@
  * limitations under the Licenses. */
 
 //! # A sample crate that uses `codemaker`.
+//#![feature(trace_macros)]
 
 use heck::ShoutySnakeCase;
 use serde::Deserialize;
@@ -64,6 +65,8 @@ define_codemaker_rules! {
     }
 }
 
+//trace_macros!(true);
+
 define_stateless_codemaker! {
     /// Make a function for looking up the string for an integer status code.
     ///
@@ -71,15 +74,16 @@ define_stateless_codemaker! {
     /// an integer status code and return the corresponding status string, or None
     /// if the code is unknown.
     CodeLookupFunc {
-        &StatusCodes as input => py::FunctionDefinition {
-            py::FunctionDefinition::new("status_for_code")
-                .add_arg("code")
-                .extend(input.codes.iter().map(Self::make_from))
-                .push(py::Statement::new_raw("return None"))
+        &StatusCodes as input => @py::quoted_rule: FunctionDefinition! {
+            def status_for_code(code):{
+                $(Self::make_from_iter(&input.codes))*
+                return "" // TODO: macro-based support for variables, to return `None`
+            }
         }
-        &(u16, String) as (code, status) => py::Statement {
-            // Haven't implemented `if` statements yet...
-            py::Statement::Raw(format!("if code == {}: return \"{}\"", code, status))
+        &(u16, String) as (code, status) => @py::quoted_rule: Statement! {
+            if code == $(code):{
+                return $(status)
+            }
         }
     }
 }

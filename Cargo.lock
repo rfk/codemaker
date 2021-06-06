@@ -9,6 +9,16 @@ name = "codemaker_python"
 version = "0.0.1"
 dependencies = [
  "codemaker",
+ "codemaker_python_macros",
+]
+
+[[package]]
+name = "codemaker_python_macros"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
